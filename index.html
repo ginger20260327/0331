@@ -1,0 +1,522 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>AI Pose Guide - 自媒體構圖助手</title>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { 
+            margin: 0; 
+            overflow: hidden; 
+            background-color: #000; 
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            -webkit-tap-highlight-color: transparent;
+            height: 100vh;
+            height: 100dvh; 
+        }
+        .canvas-container { position: relative; width: 100%; height: 100%; display: flex; justify-content: center; align-items: center; }
+        video { 
+            position: absolute;
+            width: 1px; height: 1px;
+            opacity: 0; pointer-events: none;
+        }
+        canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; }
+        .mirror { transform: scaleX(-1); }
+        
+        .ui-overlay { 
+            position: absolute; top: 0; left: 0; 
+            width: 100%; height: 100%; 
+            pointer-events: none; 
+            display: flex; flex-direction: column; justify-content: space-between; 
+            padding: env(safe-area-inset-top) 20px env(safe-area-inset-bottom) 20px; 
+            z-index: 10; 
+        }
+        .guide-template { 
+            position: absolute; top: 50%; left: 50%; 
+            transform: translate(-50%, -50%); 
+            width: 45%; height: 90%;
+            border: 2px dashed rgba(255, 255, 255, 0.4); 
+            border-radius: 120px; 
+            transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275); 
+            z-index: 5; 
+            pointer-events: none;
+        }
+        .perfect-match { border: 4px solid #4ade80; box-shadow: 0 0 30px rgba(74, 222, 128, 0.5); background-color: rgba(74, 222, 128, 0.05); }
+        
+        .glass-btn {
+            background: rgba(255, 255, 255, 0.15);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            color: white;
+            padding: 10px 18px;
+            border-radius: 999px;
+            font-size: 14px;
+            pointer-events: auto;
+            transition: all 0.2s;
+            cursor: pointer;
+        }
+        .glass-btn:active { transform: scale(0.9); background: rgba(255, 255, 255, 0.3); }
+        .glass-btn.active-btn { background: rgba(255, 220, 50, 0.35); border-color: rgba(255, 220, 50, 0.6); }
+
+        #capture-btn { 
+            width: 72px; height: 72px; 
+            background: white; border-radius: 50%; 
+            border: 5px solid rgba(255,255,255,0.3); 
+            box-shadow: 0 0 20px rgba(0,0,0,0.4); 
+            pointer-events: auto; transition: all 0.2s; cursor: pointer;
+        }
+        #capture-btn:active { transform: scale(0.85); background: #eee; }
+        
+        .flash-effect { animation: flash 0.2s ease-out forwards; }
+        @keyframes flash {
+            0% { background-color: #fff; opacity: 1; }
+            100% { background-color: transparent; opacity: 0; }
+        }
+        .loading-screen {
+            position: fixed; inset: 0; background: #000;
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+            z-index: 100; color: white; transition: opacity 0.5s;
+        }
+
+        /* 構圖建議浮層 */
+        #tip-box {
+            position: absolute;
+            bottom: 140px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(0,0,0,0.65);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            color: white;
+            padding: 10px 20px;
+            border-radius: 999px;
+            font-size: 13px;
+            font-weight: 500;
+            white-space: nowrap;
+            z-index: 20;
+            pointer-events: none;
+            transition: opacity 0.3s;
+            border: 1px solid rgba(255,255,255,0.15);
+            max-width: 90vw;
+            white-space: normal;
+            text-align: center;
+        }
+
+        /* 鏡頭切換指示器 */
+        #camera-indicator {
+            font-size: 11px;
+            color: rgba(255,255,255,0.5);
+            text-align: center;
+            margin-top: 4px;
+            pointer-events: none;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="flash-layer" class="fixed inset-0 pointer-events-none z-50"></div>
+
+    <div id="setup-box" class="loading-screen">
+        <div class="mb-6 text-4xl">📸</div>
+        <h2 class="font-bold text-2xl mb-2">AI 構圖助手</h2>
+        <p class="text-gray-400 text-sm mb-8 px-10 text-center">專為自媒體設計的 AI 拍攝嚮導，即時對位提醒。</p>
+        <button id="start-btn" class="bg-white text-black px-12 py-4 rounded-full text-lg font-bold shadow-2xl active:scale-95 transition-transform">
+            開始使用
+        </button>
+        <p id="error-text" class="text-xs text-red-500 mt-6 hidden px-6 text-center"></p>
+    </div>
+
+    <div class="canvas-container">
+        <video id="input_video" autoplay muted playsinline></video>
+        <canvas id="output_canvas" class="mirror"></canvas>
+        
+        <div class="ui-overlay">
+            <!-- 頂部欄 -->
+            <div class="flex justify-between items-start pointer-events-none">
+                <div class="bg-black/40 text-white p-3 rounded-2xl backdrop-blur-md border border-white/10">
+                    <h1 class="font-bold text-base">AI 助手</h1>
+                    <p id="status-text" class="text-[10px] text-green-400 font-mono uppercase tracking-widest">系統準備中</p>
+                </div>
+                <div class="flex flex-col gap-2 items-end" style="pointer-events:auto;">
+                    <!-- 鏡頭切換 -->
+                    <button id="switch-camera-btn" class="glass-btn">
+                        前鏡頭 🔄
+                    </button>
+                    <div id="camera-indicator">點擊切換前/後鏡頭</div>
+                    <!-- 構圖框切換 -->
+                    <button id="guide-btn" onclick="toggleGuide()" class="glass-btn">
+                        全身 📐
+                    </button>
+                    <!-- 格線切換 -->
+                    <button id="grid-btn" onclick="toggleGrid()" class="glass-btn">
+                        格線 ⊞
+                    </button>
+                </div>
+            </div>
+
+            <!-- 中間：完美構圖提示 -->
+            <div id="pose-indicator" class="self-center bg-green-500/90 text-white px-6 py-2 rounded-full text-sm font-bold backdrop-blur-md opacity-0 transition-opacity animate-pulse shadow-lg">
+                ✨ 完美構圖！請拍照 ✨
+            </div>
+
+            <!-- 底部欄 -->
+            <div class="flex justify-center items-center pb-8">
+                <button id="capture-btn" aria-label="拍照"></button>
+            </div>
+        </div>
+
+        <!-- 構圖引導框 -->
+        <div id="guide-box" class="guide-template"></div>
+
+        <!-- 構圖建議浮層 -->
+        <div id="tip-box" style="opacity:0;">請對齊畫面中的構圖框</div>
+    </div>
+
+    <script>
+        const videoElement = document.getElementById('input_video');
+        const canvasElement = document.getElementById('output_canvas');
+        const canvasCtx = canvasElement.getContext('2d');
+        const statusText = document.getElementById('status-text');
+        const guideBox = document.getElementById('guide-box');
+        const indicator = document.getElementById('pose-indicator');
+        const setupBox = document.getElementById('setup-box');
+        const startBtn = document.getElementById('start-btn');
+        const switchBtn = document.getElementById('switch-camera-btn');
+        const captureBtn = document.getElementById('capture-btn');
+        const flashLayer = document.getElementById('flash-layer');
+        const errorText = document.getElementById('error-text');
+        const tipBox = document.getElementById('tip-box');
+        const gridBtn = document.getElementById('grid-btn');
+        const guideBtn = document.getElementById('guide-btn');
+        const cameraIndicator = document.getElementById('camera-indicator');
+
+        let isMatch = false;
+        let currentFacingMode = "user";
+        let localStream = null;
+        let isProcessing = false;
+        let showGrid = false;
+        // 0=全身, 1=半身, 2=大頭
+        let guideMode = 0; 
+        const guideModes = [
+            { label: '全身 📐', width: '45%', height: '90%', borderRadius: '120px' },
+            { label: '半身 📐', width: '70%', height: '60%', borderRadius: '40px' },
+            { label: '大頭 📐', width: '60%', height: '45%', borderRadius: '999px' },
+        ];
+
+        // ─── MediaPipe ────────────────────────────────────────────────
+        const pose = new Pose({
+            locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
+        });
+        pose.setOptions({
+            modelComplexity: 1,
+            smoothLandmarks: true,
+            minDetectionConfidence: 0.6,
+            minTrackingConfidence: 0.6
+        });
+
+        pose.onResults((results) => {
+            if (!results.image) return;
+
+            if (canvasElement.width !== videoElement.videoWidth || canvasElement.height !== videoElement.videoHeight) {
+                canvasElement.width = videoElement.videoWidth;
+                canvasElement.height = videoElement.videoHeight;
+            }
+
+            canvasCtx.save();
+            canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+
+            if (currentFacingMode === "user") {
+                canvasCtx.translate(canvasElement.width, 0);
+                canvasCtx.scale(-1, 1);
+            }
+
+            canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
+
+            // 三分法格線
+            if (showGrid) {
+                drawThirdGrid();
+            }
+
+            canvasCtx.restore();
+
+            // 骨架 & 構圖判斷（不在 save/restore 內，避免鏡像影響繪製位置）
+            if (results.poseLandmarks) {
+                statusText.innerText = "已鎖定主體";
+                statusText.className = 'text-[10px] text-green-400 font-mono uppercase tracking-widest';
+
+                canvasCtx.save();
+                if (currentFacingMode === "user") {
+                    canvasCtx.translate(canvasElement.width, 0);
+                    canvasCtx.scale(-1, 1);
+                }
+                drawConnectors(canvasCtx, results.poseLandmarks, POSE_CONNECTIONS, {color: 'rgba(255,255,255,0.6)', lineWidth: 2});
+                drawLandmarks(canvasCtx, results.poseLandmarks, {color: '#4ade80', lineWidth: 1, radius: 2});
+                canvasCtx.restore();
+
+                // 構圖判斷 & 建議
+                evaluateComposition(results.poseLandmarks);
+            } else {
+                statusText.innerText = "偵測中...";
+                statusText.className = 'text-[10px] text-gray-400 font-mono uppercase tracking-widest';
+                if (isMatch) {
+                    isMatch = false;
+                    guideBox.classList.remove('perfect-match');
+                    indicator.style.opacity = "0";
+                }
+                showTip("請站在相機前，確保全身可見");
+            }
+        });
+
+        // ─── 三分法格線 ───────────────────────────────────────────────
+        function drawThirdGrid() {
+            const w = canvasElement.width;
+            const h = canvasElement.height;
+            canvasCtx.save();
+            canvasCtx.strokeStyle = 'rgba(255, 255, 255, 0.35)';
+            canvasCtx.lineWidth = 1;
+            canvasCtx.setLineDash([6, 6]);
+            // 兩條縱線
+            for (let i = 1; i < 3; i++) {
+                canvasCtx.beginPath();
+                canvasCtx.moveTo(w / 3 * i, 0);
+                canvasCtx.lineTo(w / 3 * i, h);
+                canvasCtx.stroke();
+            }
+            // 兩條橫線
+            for (let i = 1; i < 3; i++) {
+                canvasCtx.beginPath();
+                canvasCtx.moveTo(0, h / 3 * i);
+                canvasCtx.lineTo(w, h / 3 * i);
+                canvasCtx.stroke();
+            }
+            // 四個黃金分割點
+            canvasCtx.setLineDash([]);
+            canvasCtx.fillStyle = 'rgba(255, 220, 50, 0.7)';
+            [[1,1],[2,1],[1,2],[2,2]].forEach(([xi, yi]) => {
+                canvasCtx.beginPath();
+                canvasCtx.arc(w/3*xi, h/3*yi, 6, 0, Math.PI*2);
+                canvasCtx.fill();
+            });
+            canvasCtx.restore();
+        }
+
+        // ─── 構圖建議邏輯 ─────────────────────────────────────────────
+        function evaluateComposition(landmarks) {
+            const nose = landmarks[0];
+            const leftShoulder = landmarks[11];
+            const rightShoulder = landmarks[12];
+            const leftHip = landmarks[23];
+            const rightHip = landmarks[24];
+
+            if (!nose) return;
+
+            // 水平置中判斷
+            const noseX = nose.x; // 0~1, 0=左, 1=右
+            const noseY = nose.y;
+
+            // 垂直位置建議
+            let tip = "";
+            if (noseY < 0.12) {
+                tip = "⬇️ 主體偏太高，請往下移動";
+            } else if (noseY > 0.45) {
+                tip = "⬆️ 主體偏太低，請往上移動";
+            } else if (noseX < 0.3) {
+                tip = "➡️ 主體偏左，請往右移動";
+            } else if (noseX > 0.7) {
+                tip = "⬅️ 主體偏右，請往左移動";
+            } else if (leftShoulder && rightShoulder) {
+                // 肩膀傾斜判斷
+                const shoulderDiff = Math.abs(leftShoulder.y - rightShoulder.y);
+                if (shoulderDiff > 0.06) {
+                    tip = "📐 肩膀不水平，請調整站姿";
+                } else {
+                    tip = "✅ 構圖良好，可以拍照了！";
+                }
+            } else {
+                tip = "✅ 構圖良好，可以拍照了！";
+            }
+
+            showTip(tip);
+
+            // 完美構圖判定
+            const isPerfect = noseY > 0.15 && noseY < 0.4 && noseX > 0.3 && noseX < 0.7;
+            if (isPerfect !== isMatch) {
+                isMatch = isPerfect;
+                if (isPerfect) {
+                    guideBox.classList.add('perfect-match');
+                    indicator.style.opacity = "1";
+                } else {
+                    guideBox.classList.remove('perfect-match');
+                    indicator.style.opacity = "0";
+                }
+            }
+        }
+
+        let tipTimer = null;
+        function showTip(text) {
+            tipBox.textContent = text;
+            tipBox.style.opacity = "1";
+            clearTimeout(tipTimer);
+            tipTimer = setTimeout(() => { tipBox.style.opacity = "0"; }, 3000);
+        }
+
+        // ─── 相機初始化（修正版）─────────────────────────────────────
+        async function initCamera(mode) {
+            // 1. 先完整停止舊的 stream
+            if (localStream) {
+                localStream.getTracks().forEach(track => track.stop());
+                localStream = null;
+            }
+            // 2. 清除 srcObject，避免 iOS 殘留
+            videoElement.srcObject = null;
+
+            // 3. 稍微等待讓裝置釋放（重要！iOS 需要）
+            await new Promise(r => setTimeout(r, 300));
+
+            // 4. 多層 constraints fallback（解決 iOS OverconstrainedError）
+            const constraintsList = [
+                {
+                    video: {
+                        facingMode: mode === "user" ? "user" : { exact: "environment" },
+                        width: { ideal: 1280 }, height: { ideal: 720 }
+                    }
+                },
+                {
+                    video: {
+                        facingMode: mode === "user" ? "user" : "environment",
+                        width: { ideal: 1280 }, height: { ideal: 720 }
+                    }
+                },
+                { video: true }
+            ];
+
+            let stream = null;
+            for (const constraints of constraintsList) {
+                try {
+                    stream = await navigator.mediaDevices.getUserMedia(constraints);
+                    break;
+                } catch (e) {
+                    console.warn("Camera constraint failed, trying next...", e);
+                }
+            }
+
+            if (!stream) throw new Error("No camera stream available");
+
+            localStream = stream;
+            videoElement.srcObject = stream;
+
+            // 鏡像
+            if (mode === "user") {
+                canvasElement.classList.add('mirror');
+            } else {
+                canvasElement.classList.remove('mirror');
+            }
+
+            await videoElement.play();
+        }
+
+        // ─── 事件監聽 ─────────────────────────────────────────────────
+        startBtn.addEventListener('click', async () => {
+            startBtn.disabled = true;
+            startBtn.innerText = "啟動中...";
+            try {
+                await initCamera(currentFacingMode);
+                setupBox.style.opacity = "0";
+                setTimeout(() => setupBox.style.display = 'none', 500);
+                isProcessing = true;
+                processFrame();
+                updateCameraLabel();
+            } catch (err) {
+                errorText.innerText = "無法存取相機，請確保已開啟瀏覽器相機權限。";
+                errorText.classList.remove('hidden');
+                startBtn.disabled = false;
+                startBtn.innerText = "重試";
+            }
+        });
+
+        switchBtn.addEventListener('click', async () => {
+            if (!isProcessing) return;
+            switchBtn.disabled = true;
+            switchBtn.innerText = "切換中...";
+            currentFacingMode = (currentFacingMode === "user") ? "environment" : "user";
+            try {
+                await initCamera(currentFacingMode);
+                updateCameraLabel();
+            } catch (err) {
+                // 切換失敗 → 復原
+                currentFacingMode = (currentFacingMode === "user") ? "environment" : "user";
+                await initCamera(currentFacingMode).catch(() => {});
+                updateCameraLabel();
+                showTip("⚠️ 切換鏡頭失敗，已回復原鏡頭");
+            } finally {
+                switchBtn.disabled = false;
+                updateCameraLabel();
+            }
+        });
+
+        function updateCameraLabel() {
+            if (currentFacingMode === "user") {
+                switchBtn.innerHTML = "前鏡頭 🔄";
+                cameraIndicator.textContent = "目前：前鏡頭（自拍）";
+            } else {
+                switchBtn.innerHTML = "後鏡頭 🔄";
+                cameraIndicator.textContent = "目前：後鏡頭";
+            }
+        }
+
+        captureBtn.addEventListener('click', () => {
+            flashLayer.classList.remove('flash-effect');
+            void flashLayer.offsetWidth;
+            flashLayer.classList.add('flash-effect');
+            try {
+                const dataURL = canvasElement.toDataURL('image/jpeg', 0.9);
+                const link = document.createElement('a');
+                link.href = dataURL;
+                link.download = `AI_Shot_${Date.now()}.jpg`;
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+            } catch (err) {
+                alert("儲存失敗，建議使用 Safari 或 Chrome 瀏覽器。");
+            }
+        });
+
+        // ─── 構圖框切換（修正版）─────────────────────────────────────
+        window.toggleGuide = function() {
+            guideMode = (guideMode + 1) % guideModes.length;
+            const m = guideModes[guideMode];
+            guideBox.style.width = m.width;
+            guideBox.style.height = m.height;
+            guideBox.style.borderRadius = m.borderRadius;
+            guideBtn.textContent = m.label;
+        };
+
+        // ─── 格線切換 ─────────────────────────────────────────────────
+        window.toggleGrid = function() {
+            showGrid = !showGrid;
+            if (showGrid) {
+                gridBtn.classList.add('active-btn');
+                gridBtn.textContent = "格線 ✓";
+            } else {
+                gridBtn.classList.remove('active-btn');
+                gridBtn.textContent = "格線 ⊞";
+            }
+        };
+
+        // ─── 主迴圈 ───────────────────────────────────────────────────
+        async function processFrame() {
+            if (!isProcessing) return;
+            try {
+                await pose.send({image: videoElement});
+            } catch (e) {
+                console.error("Pose processing error", e);
+            }
+            requestAnimationFrame(processFrame);
+        }
+    </script>
+</body>
+</html>
