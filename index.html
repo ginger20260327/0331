@@ -442,6 +442,12 @@
             if (!isProcessing) return;
             switchBtn.disabled = true;
             switchBtn.innerText = "切換中...";
+
+            // ★ 關鍵：先暫停 AI 處理迴圈，讓 MediaPipe 不再佔用 stream
+            isProcessing = false;
+            // 等一個 frame，確保 pose.send() 已經結束
+            await new Promise(r => setTimeout(r, 200));
+
             currentFacingMode = (currentFacingMode === "user") ? "environment" : "user";
             try {
                 await initCamera(currentFacingMode);
@@ -453,6 +459,9 @@
                 updateCameraLabel();
                 showTip("⚠️ 切換鏡頭失敗，已回復原鏡頭");
             } finally {
+                // 重新啟動 AI 處理迴圈
+                isProcessing = true;
+                processFrame();
                 switchBtn.disabled = false;
                 updateCameraLabel();
             }
@@ -469,19 +478,52 @@
         }
 
         captureBtn.addEventListener('click', () => {
+            // 閃光
             flashLayer.classList.remove('flash-effect');
             void flashLayer.offsetWidth;
             flashLayer.classList.add('flash-effect');
+
             try {
                 const dataURL = canvasElement.toDataURL('image/jpeg', 0.9);
-                const link = document.createElement('a');
-                link.href = dataURL;
-                link.download = `AI_Shot_${Date.now()}.jpg`;
-                document.body.appendChild(link);
-                link.click();
-                document.body.removeChild(link);
+
+                // ★ iOS Safari 不支援 <a download>，改用預覽 overlay 讓用戶長按儲存
+                const overlay = document.createElement('div');
+                overlay.style.cssText = `
+                    position:fixed; inset:0; background:rgba(0,0,0,0.88);
+                    z-index:200; display:flex; flex-direction:column;
+                    align-items:center; justify-content:center; gap:16px;
+                    padding: env(safe-area-inset-top) 20px env(safe-area-inset-bottom);
+                `;
+
+                const img = document.createElement('img');
+                img.src = dataURL;
+                img.style.cssText = `
+                    max-width:90vw; max-height:70vh;
+                    border-radius:12px; object-fit:contain;
+                    box-shadow: 0 4px 40px rgba(0,0,0,0.6);
+                `;
+
+                const hint = document.createElement('p');
+                hint.textContent = '📸 長按圖片即可儲存到相簿';
+                hint.style.cssText = 'color:rgba(255,255,255,0.8); font-size:15px; margin:0; text-align:center;';
+
+                const closeBtn = document.createElement('button');
+                closeBtn.textContent = '關閉';
+                closeBtn.style.cssText = `
+                    background:rgba(255,255,255,0.15); color:white;
+                    border:1px solid rgba(255,255,255,0.3); border-radius:999px;
+                    padding:10px 32px; font-size:15px; cursor:pointer;
+                    -webkit-backdrop-filter:blur(10px);
+                `;
+                closeBtn.onclick = () => document.body.removeChild(overlay);
+
+                overlay.appendChild(img);
+                overlay.appendChild(hint);
+                overlay.appendChild(closeBtn);
+                document.body.appendChild(overlay);
+
             } catch (err) {
-                alert("儲存失敗，建議使用 Safari 或 Chrome 瀏覽器。");
+                alert("擷取失敗，請重新整理頁面後再試。");
             }
         });
 
