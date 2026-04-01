@@ -158,10 +158,10 @@
     <video id="input_video" autoplay muted playsinline></video>
 
     <!-- 主畫布：拍照截圖來源（無格線）-->
-    <canvas id="output_canvas" class="mirror"></canvas>
+    <canvas id="output_canvas"></canvas>
 
     <!-- 格線畫布：顯示用，拍照不截此層 ★ -->
-    <canvas id="grid_canvas" class="mirror"></canvas>
+    <canvas id="grid_canvas"></canvas>
 
     <!-- 點擊追蹤圈 -->
     <div id="track-ring" style="opacity:0;top:50%;left:50%;"></div>
@@ -313,9 +313,14 @@ pose.onResults(results => {
     }
 
     // ── 主畫布：影像 + 骨架（拍照用）──
+    // ★ CSS mirror 不可靠（canvas width reset 會讓 CSS 失效）
+    // 改用 ctx transform 在繪製時翻轉，截圖從 videoEl 直接抓所以不影響照片
     ctx.save();
     ctx.clearRect(0, 0, mainCanvas.width, mainCanvas.height);
-    if (currentFacingMode === "user") { ctx.translate(mainCanvas.width,0); ctx.scale(-1,1); }
+    if (currentFacingMode === "user") {
+        ctx.translate(mainCanvas.width, 0);
+        ctx.scale(-1, 1);
+    }
     ctx.drawImage(results.image, 0, 0, mainCanvas.width, mainCanvas.height);
     if (results.poseLandmarks) {
         drawConnectors(ctx, results.poseLandmarks, POSE_CONNECTIONS, {color:'rgba(255,255,255,0.55)', lineWidth:2});
@@ -344,10 +349,14 @@ pose.onResults(results => {
     }
 });
 
-// ── 格線（畫在 gridCanvas）──
+// ── 格線（畫在 gridCanvas，跟主畫布同步鏡像）──
 function drawThirdGrid() {
     const w = gridCanvas.width, h = gridCanvas.height;
     gridCtx.save();
+    if (currentFacingMode === "user") {
+        gridCtx.translate(w, 0);
+        gridCtx.scale(-1, 1);
+    }
     gridCtx.strokeStyle = 'rgba(255,255,255,0.32)';
     gridCtx.lineWidth = 1.5;
     gridCtx.setLineDash([6,6]);
@@ -440,9 +449,6 @@ async function initCamera(mode) {
     for (const c of list) { try { stream=await navigator.mediaDevices.getUserMedia(c); break; } catch(e){} }
     if (!stream) throw new Error("No stream");
     localStream=stream; videoEl.srcObject=stream;
-    const isMirror = mode==="user";
-    mainCanvas.classList.toggle('mirror', isMirror);
-    gridCanvas.classList.toggle('mirror', isMirror);
     await videoEl.play();
 }
 
