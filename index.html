@@ -247,26 +247,44 @@ let lastLandmarks = null;
 let trackedPoint = null;  // 追蹤點，畫面比例座標 {x,y}
 
 // ── 主題定義 ──────────────────────────────────
+// tips 分前後鏡頭兩套，前鏡頭（自拍）畫面鏡像，方向說明要相反
+// 統一原則：
+//   high/low = 人跟鏡頭的距離/位置，說「靠近/遠離」或「請蹲低/踮高」
+//   left/right = 以「你實際站的方向」為準，前鏡頭要反轉
+//   不使用箭頭符號，改用自然語言避免混淆
 const THEMES = [
     {
         id:'portrait', name:'人像', icon:'🧍', hint:'全身入鏡',
         guide:{ w:'45%', h:'88%', r:'120px' },
-        tips:{ high:'⬇️ 頭部偏高，鏡頭往下', low:'⬆️ 主體偏低，往上移', left:'➡️ 往右移動一些', right:'⬅️ 往左移動一些', tilt:'📐 肩膀不水平，放鬆站姿', ok:'✅ 人像構圖完美，可以拍！' }
+        // front = 前鏡頭自拍, rear = 後鏡頭
+        tips:{
+            front:{ high:'頭頂太靠近邊框，請稍微蹲低一點', low:'腳快出畫面了，請踮高或靠近鏡頭', left:'請向你的右邊移一步', right:'請向你的左邊移一步', tilt:'肩膀不水平，試著放鬆站直', ok:'✅ 人像構圖完美，可以拍！' },
+            rear:{  high:'主體太高，請往後退一步',           low:'主體太低，請往前走一步',           left:'主體偏左，請向右移',      right:'主體偏右，請向左移',     tilt:'肩膀不水平，試著放鬆站直', ok:'✅ 人像構圖完美，可以拍！' }
+        }
     },
     {
         id:'halfbody', name:'半身', icon:'🙎', hint:'上半身特寫',
         guide:{ w:'65%', h:'56%', r:'40px' },
-        tips:{ high:'⬇️ 臉部偏高，往下移', low:'⬆️ 主體偏低，往上移', left:'➡️ 往右移動', right:'⬅️ 往左移動', tilt:'📐 注意頭部傾斜', ok:'✅ 半身構圖到位！' }
+        tips:{
+            front:{ high:'臉偏高，請稍微蹲低或鏡頭往下傾', low:'主體太低，請踮高或鏡頭往上', left:'請向你的右邊移一點', right:'請向你的左邊移一點', tilt:'頭部有點歪，調整一下', ok:'✅ 半身構圖到位！' },
+            rear:{  high:'主體偏高，請鏡頭稍微往下',         low:'主體偏低，請鏡頭稍微往上',       left:'主體偏左，向右移一點',   right:'主體偏右，向左移一點',  tilt:'頭部有點歪，調整一下',   ok:'✅ 半身構圖到位！' }
+        }
     },
     {
         id:'food', name:'食物', icon:'🍽️', hint:'俯拍/側拍',
         guide:{ w:'75%', h:'75%', r:'16px' },
-        tips:{ high:'📷 嘗試靠近主體', low:'📷 往後退一些', left:'➡️ 主體移至中央', right:'⬅️ 主體移至中央', tilt:'📐 保持水平更好看', ok:'✅ 食物擺盤構圖讚！' }
+        tips:{
+            front:{ high:'距離太近，鏡頭往上移遠一些', low:'距離太遠，鏡頭靠近主體', left:'主體偏左，請移到畫面中央', right:'主體偏右，請移到畫面中央', tilt:'畫面有點歪，請保持水平', ok:'✅ 食物擺盤構圖讚！' },
+            rear:{  high:'距離太近，鏡頭往後移遠一些', low:'距離太遠，鏡頭靠近主體', left:'主體偏左，請移到畫面中央', right:'主體偏右，請移到畫面中央', tilt:'畫面有點歪，請保持水平', ok:'✅ 食物擺盤構圖讚！' }
+        }
     },
     {
         id:'landscape', name:'風景', icon:'🌄', hint:'三分法最佳',
         guide:{ w:'92%', h:'52%', r:'12px' },
-        tips:{ high:'⬇️ 地平線偏高，往下調', low:'⬆️ 地平線偏低，往上調', left:'➡️ 主體移至黃金點', right:'⬅️ 主體移至黃金點', tilt:'📐 保持水平，避免歪斜', ok:'✅ 風景構圖完美！' }
+        tips:{
+            front:{ high:'天空太多，鏡頭稍微往下俯', low:'地面太多，鏡頭稍微往上仰', left:'主體偏左，移到右側黃金點更佳', right:'主體偏右，移到左側黃金點更佳', tilt:'畫面傾斜，請保持鏡頭水平', ok:'✅ 風景構圖完美！' },
+            rear:{  high:'天空太多，鏡頭稍微往下俯', low:'地面太多，鏡頭稍微往上仰', left:'主體偏左，移到右側黃金點更佳', right:'主體偏右，移到左側黃金點更佳', tilt:'畫面傾斜，請保持鏡頭水平', ok:'✅ 風景構圖完美！' }
+        }
     },
 ];
 
@@ -275,7 +293,15 @@ const currentTheme = () => THEMES.find(t => t.id === currentThemeId);
 
 // ── MediaPipe ─────────────────────────────────
 const pose = new Pose({ locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${f}` });
-pose.setOptions({ modelComplexity:1, smoothLandmarks:true, minDetectionConfidence:0.6, minTrackingConfidence:0.6 });
+// modelComplexity:0 速度最快，適合手機即時偵測
+pose.setOptions({ modelComplexity:0, smoothLandmarks:true, minDetectionConfidence:0.5, minTrackingConfidence:0.5 });
+
+// warm-up：第一次 pose.send 最慢（模型初始化），開鏡頭後就先預熱
+async function warmUpPose() {
+    const dummy = document.createElement('canvas');
+    dummy.width = 64; dummy.height = 64;
+    try { await pose.send({ image: dummy }); } catch(e) {}
+}
 
 pose.onResults(results => {
     if (!results.image) return;
@@ -359,15 +385,30 @@ function evaluateComposition(landmarks) {
     const nose = landmarks[0];
     const ls = landmarks[11], rs = landmarks[12];
     if (!nose) return;
-    const T = currentTheme().tips;
+
+    const side = currentFacingMode === "user" ? "front" : "rear";
+    const T = currentTheme().tips[side];
     const nx=nose.x, ny=nose.y;
+
+    // 前鏡頭畫面是鏡像的，MediaPipe 座標 0=左edge，但畫面顯示已翻轉
+    // 所以前鏡頭：nx < 0.28 表示「人在畫面右邊（實際站的左邊）」→ 要叫他往左走（實際往右）
+    // 需反轉 left/right tip
     let tip = "";
     if      (ny < 0.12) tip = T.high;
     else if (ny > 0.48) tip = T.low;
-    else if (nx < 0.28) tip = T.left;
-    else if (nx > 0.72) tip = T.right;
-    else if (ls && rs && Math.abs(ls.y-rs.y) > 0.06) tip = T.tilt;
-    else tip = T.ok;
+    else if (currentFacingMode === "user") {
+        // 前鏡頭：鏡像後 nx<0.28 畫面看起來偏右，提示「向左走」
+        if      (nx < 0.28) tip = T.right;
+        else if (nx > 0.72) tip = T.left;
+        else if (ls && rs && Math.abs(ls.y-rs.y) > 0.06) tip = T.tilt;
+        else tip = T.ok;
+    } else {
+        if      (nx < 0.28) tip = T.left;
+        else if (nx > 0.72) tip = T.right;
+        else if (ls && rs && Math.abs(ls.y-rs.y) > 0.06) tip = T.tilt;
+        else tip = T.ok;
+    }
+
     showTip(tip);
 
     const isPerfect = ny>0.14 && ny<0.42 && nx>0.28 && nx<0.72;
@@ -457,6 +498,8 @@ startBtn.addEventListener('click', async () => {
     try {
         await initCamera(currentFacingMode);
         setupBox.style.opacity="0"; setTimeout(() => setupBox.style.display='none', 500);
+        // warm-up：先跑一次讓模型載入，讓正式偵測更快
+        warmUpPose();
         isProcessing=true; processFrame(); updateCameraLabel();
     } catch(e) {
         errorText.textContent="無法存取相機，請確認已開啟相機權限。";
@@ -489,14 +532,31 @@ function updateCameraLabel() {
     cameraIndicator.textContent = isUser ? "目前：前鏡頭（自拍）" : "目前：後鏡頭";
 }
 
-// ── 拍照（iOS Safari 相容）──
+// ── 拍照（iOS Safari 相容，100% 無格線）──
+// 不使用 mainCanvas.toDataURL()，改從原始 videoEl 直接截圖
+// 確保格線、UI overlay 完全不出現在照片中
 captureBtn.addEventListener('click', () => {
     flashLayer.classList.remove('flash-effect');
     void flashLayer.offsetWidth;
     flashLayer.classList.add('flash-effect');
     try {
-        // ★ 只截主畫布，格線 canvas 不在截圖範圍內
-        const dataURL = mainCanvas.toDataURL('image/jpeg', 0.92);
+        const vw = videoEl.videoWidth, vh = videoEl.videoHeight;
+        if (!vw || !vh) { alert("相機尚未就緒，請稍候再試。"); return; }
+
+        // 建立 offscreen canvas，直接從 video 畫原始畫面
+        const off = document.createElement('canvas');
+        off.width = vw; off.height = vh;
+        const offCtx = off.getContext('2d');
+
+        // 前鏡頭：video 原始像素未鏡像，截圖時手動翻轉讓照片方向正確
+        if (currentFacingMode === "user") {
+            offCtx.translate(vw, 0);
+            offCtx.scale(-1, 1);
+        }
+        offCtx.drawImage(videoEl, 0, 0, vw, vh);
+
+        const dataURL = off.toDataURL('image/jpeg', 0.92);
+
         const overlay = document.createElement('div');
         overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.92);z-index:200;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;padding:env(safe-area-inset-top) 20px env(safe-area-inset-bottom);';
         const img = document.createElement('img');
